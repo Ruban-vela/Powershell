@@ -1,0 +1,66 @@
+# Get CPU Type
+$cpu = Get-WmiObject Win32_Processor | Select-Object -Property Name, Manufacturer
+
+# Get Amount and Type of RAM
+$ram = Get-WmiObject Win32_PhysicalMemory | Select-Object -Property Capacity, MemoryType
+
+# Get Storage Capacity and Type (SSD/HDD)
+$storage = Get-WmiObject Win32_DiskDrive | Select-Object -Property Model, Size, MediaType
+
+# Get Network Interface Specifications and Bandwidth
+$network = Get-WmiObject Win32_NetworkAdapter | Where-Object { $_.NetConnectionStatus -eq 2 } | Select-Object -Property Name, Speed, MACAddress
+
+# Get Windows OS Version
+$os = Get-WmiObject Win32_OperatingSystem | Select-Object -Property Caption, Version, BuildNumber
+
+# Display results
+Write-Host "CPU Type:"
+$cpu | Format-Table -AutoSize
+
+Write-Host "Amount and Type of RAM:"
+$ram | ForEach-Object {
+    [PSCustomObject]@{
+        CapacityGB = [math]::Round($_.Capacity / 1GB, 2)
+        MemoryType = switch ($_.MemoryType) {
+            20 { "DDR" }
+            21 { "DDR-2" }
+            22 { "DDR-2 FB-DIMM" }
+            24 { "DDR-3" }
+            25 { "DDR-4" }
+            default { "Unknown" }
+        }
+    }
+} | Format-Table -AutoSize
+
+Write-Host "Storage Capacity and Type (SSD/HDD):"
+$storage | ForEach-Object {
+    [PSCustomObject]@{
+        Model = $_.Model
+        CapacityGB = [math]::Round($_.Size / 1GB, 2)
+        MediaType = if ($_.MediaType -eq $null) { "Unknown" } else { $_.MediaType }
+    }
+} | Format-Table -AutoSize
+
+Write-Host "Network Interface Specifications and Bandwidth:"
+$network | Format-Table -AutoSize
+
+Write-Host "Windows OS Version:"
+$os | Format-Table -AutoSize
+# Average memory usage
+$avgMemoryUsage = Get-WmiObject Win32_PerfFormattedData_PerfOS_Memory | Select-Object -Property AvailableMBytes, CommittedBytes
+
+# Disk I/O metrics
+$diskIO = Get-WmiObject Win32_PerfFormattedData_PerfDisk_LogicalDisk | Select-Object -Property Name, DiskReadBytesPerSec, DiskWriteBytesPerSec
+
+# Network throughput
+$networkThroughput = Get-WmiObject Win32_PerfFormattedData_Tcpip_NetworkInterface | Select-Object -Property Name, BytesTotalPerSec
+
+# Display results
+Write-Host "Average Memory Usage:"
+$avgMemoryUsage | Format-Table -AutoSize
+
+Write-Host "Disk I/O Metrics:"
+$diskIO | Format-Table -AutoSize
+
+Write-Host "Network Throughput:"
+$networkThroughput | Format-Table -AutoSize
