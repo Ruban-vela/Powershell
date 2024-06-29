@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# List of servers
+servers=("server1" "server2" "server3")
+
+# Command to run on each server
+command="your_command_here"
+
+# Function to run the command on a server
+run_command() {
+  server=$1
+  ssh "$server" "$command" &
+}
+
+# Run the command on all servers in parallel
+for server in "${servers[@]}"; do
+  run_command "$server"
+done
+
+# Wait for all background processes to finish
+wait
+
+echo "Command executed on all servers."
