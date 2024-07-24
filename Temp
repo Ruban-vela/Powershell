@@ -1,0 +1,8 @@
+Get-Partition | Select-Object -Property DiskNumber, PartitionNumber, DriveLetter, 
+  @{Name='Size'; Expression={
+    if ($_.Size -ge 1GB) {
+      [math]::Round($_.Size / 1GB, 2).ToString() + " GB"
+    } else {
+      [math]::Round($_.Size / 1MB, 2).ToString() + " MB"
+    }
+  }}, Type
