@@ -6,3 +6,23 @@ Get-Partition | Select-Object -Property DiskNumber, PartitionNumber, DriveLetter
       [math]::Round($_.Size / 1MB, 2).ToString() + " MB"
     }
   }}, Type
+
+
+$groupedData = $data | Group-Object -Property Hostname
+
+$output = @()
+foreach ($group in $groupedData) {
+    $hostname = $group.Name
+    $rows = $group.Group
+
+    $mergedRow = $rows | Select-Object -First 1
+    $mergedRow.Hostname = $hostname
+    $output += $mergedRow
+
+    for ($i = 1; $i -lt $rows.Count; $i++) {
+        $rows[$i].Hostname = ''
+        $output += $rows[$i]
+    }
+}
+
+$output
