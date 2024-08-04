@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Function to perform checkout
+checkout_function() {
+    local servername=$1
+    local request_number=$2
+
+    # Placeholder for the actual checkout command
+    echo "Checking out on server: $servername with request number: $request_number"
+    # Perform the checkout action here, e.g., ssh to the server and run a command
+    # ssh user@$servername "some_command $request_number"
+
+    # Simulating some work with sleep
+    sleep 2
+}
+
+# Function to handle multiple servers
+process_servers() {
+    local servernames=$1
+    local request_number=$2
+
+    # Check if it's a file
+    if [[ -f $servernames ]]; then
+        while IFS= read -r server; do
+            checkout_function "$server" "$request_number" &
+        done < "$servernames"
+    else
+        # If it's a single server or multiple servers separated by space
+        for server in $servernames; do
+            checkout_function "$server" "$request_number" &
+        done
+    fi
+}
+
+# Check if the correct number of arguments are provided
+if [[ $# -ne 2 ]]; then
+    echo "Usage: $0 <servername(s)|filename> <request_number>"
+    exit 1
+fi
+
+# Extract arguments
+servernames=$1
+request_number=$2
+
+# Process the servers
+process_servers "$servernames" "$request_number"
+
+# Wait for all background jobs to finish
+wait
+
+echo "All checkouts are done."
