@@ -5,8 +5,11 @@ Add-Type -AssemblyName PresentationFramework
 $reader = (New-Object System.Xml.XmlNodeReader $xaml)
 $Window = [Windows.Markup.XamlReader]::Load($reader)
 
-# Event to run task
-$Window.FindName('RunTask').Add_Click({
+# Find the Run Task button
+$RunTaskButton = $Window.FindName('RunTask')
+
+# Add event handler for the button click
+$RunTaskButton.Add_Click({
     $servers = $Window.FindName('ServersInput').Text -split ","
     $task = $Window.FindName('TaskSelection').SelectedItem.Content
     
@@ -33,4 +36,5 @@ $Window.FindName('RunTask').Add_Click({
     }
 })
 
+# Show the window
 $Window.ShowDialog() | Out-Null
