@@ -15,6 +15,10 @@ foreach ($group in $groupedData) {
     $hostname = $group.Name
     $rows = $group.Group
 
+
+
+Get-Process | Sort-Object CPU -Descending | Select-Object Name, CPU, @{Name="CPU (%)";Expression={$_.CPU * 100 / (Get-CimInstance Win32_OperatingSystem).NumberOfLogicalProcessors}} | Format-Table
+
     $mergedRow = $rows | Select-Object -First 1
     $mergedRow.Hostname = $hostname
     $output += $mergedRow
