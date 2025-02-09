@@ -1,1 +1,18 @@
 Get-CimInstance Win32_ComputerSystem | Select-Object Name, @{Name="TotalMemory(GB)"; Expression={[math]::Round($_.TotalPhysicalMemory / 1GB,2)}}
+
+
+
+
+splunk_server_group=fed-* index=winserver_log 
+    ExpandCsv(host, rrwasz404, vmwas1252407, vmwas1252411, vmwas1252412, vmwas1252493, vmwas1252495, vmwas1252496, vmwas1252503, vmwas1416519) 
+    (source="WinEventLog:System") SourceName="Microsoft-Windows-WindowsUpdateClient" 
+    OR (sourcetype="WinEventLog:System" EventCode=1074 OR EventCode=6009)
+
+| rex field=Message "Keywords=(?P<Keywords>[^\s]+)"
+| rex field=Message "KB(?P<KBNum>\d+)"
+| eval KB="KB" . KBNum
+| search KB=* NOT Keywords="Installation" NOT Keywords="Started" NOT Keywords="*Microsoft Defender Antivirus*"
+| table _time, EventCode, host, Keywords, KB, Message
+| sort _time 
+| dedup host, Message 
+| stats values(Message) AS Messages BY host
