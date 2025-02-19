@@ -16,3 +16,13 @@ splunk_server_group=fed-* index=winserver_log
 | sort _time 
 | dedup host, Message 
 | stats values(Message) AS Messages BY host
+
+
+grep -E "Primary Name|Interface|Owned by GRN|Host Comments" file.txt | 
+awk -F': ' '
+/Primary Name/ {primary=$2}
+/Interface/ {interface=$2}
+/Owned by GRN/ {if (grn1=="") grn1=$2; else grn2=$2}
+/Host Comments/ {comments=$2}
+END {print "Primary Name\tInterface\tOwned by GRN 1\tOwned by GRN 2\tHost Comments";
+     print primary "\t" interface "\t" grn1 "\t" grn2 "\t" comments}' | column -t
