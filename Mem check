@@ -26,3 +26,14 @@ awk -F': ' '
 /Host Comments/ {comments=$2}
 END {print "Primary Name\tInterface\tOwned by GRN 1\tOwned by GRN 2\tHost Comments";
      print primary "\t" interface "\t" grn1 "\t" grn2 "\t" comments}' | column -t
+
+grep -E "Primary Name|Interface|Owned by GRN|Host Comments" file.txt | 
+awk -F': ' '
+/Primary Name/ {primary=$2}
+/Interface/ {interface=$2}
+/Owned by GRN/ {if (grn1=="") grn1=$2; else grn2=$2}
+/Host Comments/ {sub(/.*created by /, "", $2); sub(/.*/, "", $2); created_by=$2}
+END {
+    print "Primary Name\tInterface\tOwned by GRN 1\tOwned by GRN 2\tCreated By";
+    print primary "\t" interface "\t" grn1 "\t" grn2 "\t" created_by
+}' | column -t
