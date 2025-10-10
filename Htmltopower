@@ -1,31 +1,53 @@
-# URL of the webpage containing the table
-$url = "https://example.com/tablepage.html"
+# URL of the webpage (or local HTML file path)
+$url = "https://example.com/yourpage.html"
 
-# Get the HTML content
+# Get HTML content
 $response = Invoke-WebRequest -Uri $url
 
-# Extract the first table
-$table = $response.ParsedHtml.getElementsByTagName("table")[0]
+# Get all tables
+$tables = @($response.ParsedHtml.getElementsByTagName("table"))
 
-# Convert table rows into PowerShell objects
-$rows = $table.getElementsByTagName("tr")
-$headers = @()
+# Get last 2 tables
+$lastTwo = $tables | Select-Object -Last 2
 
-# Get header names
-foreach ($th in $rows[0].getElementsByTagName("th")) {
-    $headers += $th.innerText
-}
+# Function to convert a HTML table to PowerShell objects
+function Convert-HTMLTableToObject {
+    param([object]$table)
 
-# Parse rows into objects
-$data = @()
-for ($i = 1; $i -lt $rows.length; $i++) {
-    $cells = $rows[$i].getElementsByTagName("td")
-    $obj = [ordered]@{}
-    for ($j = 0; $j -lt $cells.length; $j++) {
-        $obj[$headers[$j]] = $cells[$j].innerText
+    $rows = $table.getElementsByTagName("tr")
+    $headers = @()
+
+    # Detect headers
+    foreach ($th in $rows[0].getElementsByTagName("th")) {
+        $headers += ($th.innerText).Trim()
     }
-    $data += [pscustomobject]$obj
+
+    # Fallback if no <th> (use first row as headers)
+    if (-not $headers) {
+        foreach ($td in $rows[0].getElementsByTagName("td")) {
+            $headers += "Column$(([array]::IndexOf($rows[0].getElementsByTagName('td'), $td)) + 1)"
+        }
+    }
+
+    # Parse table rows
+    $data = @()
+    for ($i = 1; $i -lt $rows.length; $i++) {
+        $cells = $rows[$i].getElementsByTagName("td")
+        if ($cells.length -eq 0) { continue }
+
+        $obj = [ordered]@{}
+        for ($j = 0; $j -lt $cells.length; $j++) {
+            $obj[$headers[$j]] = ($cells[$j].innerText).Trim()
+        }
+        $data += [pscustomobject]$obj
+    }
+
+    return $data
 }
 
-# Display in table format
-$data | Format-Table
+# Convert and display last 2 tables
+for ($k = 0; $k -lt $lastTwo.Count; $k++) {
+    Write-Host "`n===== Table $($tables.Count - 1 + $k - 1) =====" -ForegroundColor Cyan
+    $converted = Convert-HTMLTableToObject -table $lastTwo[$k]
+    $converted | Format-Table -AutoSize
+}
