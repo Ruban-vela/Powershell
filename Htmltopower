@@ -1,0 +1,31 @@
+# URL of the webpage containing the table
+$url = "https://example.com/tablepage.html"
+
+# Get the HTML content
+$response = Invoke-WebRequest -Uri $url
+
+# Extract the first table
+$table = $response.ParsedHtml.getElementsByTagName("table")[0]
+
+# Convert table rows into PowerShell objects
+$rows = $table.getElementsByTagName("tr")
+$headers = @()
+
+# Get header names
+foreach ($th in $rows[0].getElementsByTagName("th")) {
+    $headers += $th.innerText
+}
+
+# Parse rows into objects
+$data = @()
+for ($i = 1; $i -lt $rows.length; $i++) {
+    $cells = $rows[$i].getElementsByTagName("td")
+    $obj = [ordered]@{}
+    for ($j = 0; $j -lt $cells.length; $j++) {
+        $obj[$headers[$j]] = $cells[$j].innerText
+    }
+    $data += [pscustomobject]$obj
+}
+
+# Display in table format
+$data | Format-Table
