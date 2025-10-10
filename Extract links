@@ -1,0 +1,32 @@
+# URL of your wiki or page
+$url = "https://wiki.yourcompany.local/path/page.html"
+
+# Get the page HTML
+$response = Invoke-WebRequest -Uri $url -UseDefaultCredentials
+
+# Parse the HTML content area
+# (Change 'content' below if your site uses 'main', 'bodyContent', 'mw-content-text', etc.)
+$contentDiv = $response.ParsedHtml.getElementById("content")
+
+if (-not $contentDiv) {
+    Write-Host "❌ 'content' section not found — check the ID or class name." -ForegroundColor Red
+    return
+}
+
+# Extract all <a> tags inside the content section
+$anchors = $contentDiv.getElementsByTagName("a")
+
+# Convert to structured PowerShell objects
+$results = foreach ($a in $anchors) {
+    $text = ($a.innerText).Trim()
+    $href = $a.href
+    if (![string]::IsNullOrWhiteSpace($text) -and $href) {
+        [PSCustomObject]@{
+            'Topic Name' = $text
+            'Link'       = $href
+        }
+    }
+}
+
+# Display nicely
+$results | Format-Table -AutoSize
