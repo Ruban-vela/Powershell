@@ -1,0 +1,32 @@
+# Import CSVs
+$datafromautomation  = Import-Csv "CSV1.csv"
+$datafromservicenow  = Import-Csv "CSV2.csv"
+$errordetails        = Import-Csv "CSV3.csv"
+
+# Create lookup tables
+$incToHost   = @{}
+$hostToError = @{}
+
+$datafromservicenow | ForEach-Object {
+    $incToHost[$_.INC] = $_.Host
+}
+
+$errordetails | ForEach-Object {
+    $hostToError[$_.Host] = $_.ErrorCode
+}
+
+# Build final output
+$result = foreach ($row in $datafromautomation) {
+    $inc  = $row.INC
+    $host = $incToHost[$inc]
+    $err  = $hostToError[$host]
+
+    [PSCustomObject]@{
+        INC       = $inc
+        Host      = $host
+        ErrorCode = $err
+    }
+}
+
+# Export to CSV
+$result | Export-Csv "Final_Output.csv" -NoTypeInformation
