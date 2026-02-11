@@ -4,3 +4,10 @@ VAR WeekStart = 'YourTable'[DateColumn] - WEEKDAY('YourTable'[DateColumn], 2) + 
 VAR WeekEnd = WeekStart + 6
 RETURN
 FORMAT(WeekStart, "MMM dd") & " - " & FORMAT(WeekEnd, "MMM dd")
+
+
+
+WeekSortKey = 
+VAR WStart = 'YourTable'[DateColumn] - WEEKDAY('YourTable'[DateColumn], 2) + 1
+RETURN 
+YEAR(WStart) * 10000 + MONTH(WStart) * 100 + DAY(WStart)
