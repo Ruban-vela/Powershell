@@ -1,0 +1,6 @@
+
+Week Range = 
+VAR WeekStart = 'YourTable'[DateColumn] - WEEKDAY('YourTable'[DateColumn], 2) + 1
+VAR WeekEnd = WeekStart + 6
+RETURN
+FORMAT(WeekStart, "MMM dd") & " - " & FORMAT(WeekEnd, "MMM dd")
