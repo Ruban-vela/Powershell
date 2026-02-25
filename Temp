@@ -1,50 +1,12 @@
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-# Time zone mapping
-$timeZones = @{
-    "EST (New York)" = "Eastern Standard Time"
-    "London (UK)"    = "GMT Standard Time"
-    "JST (Japan)"    = "Tokyo Standard Time"
-}
-
-# Create form
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "World Clock - EST | London | JST"
-$form.Size = New-Object System.Drawing.Size(400, 200)
-$form.StartPosition = "CenterScreen"
-$form.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-
-# Add labels
-$labels = @{}
-$y = 20
-
-foreach ($location in $timeZones.Keys) {
-    $label = New-Object System.Windows.Forms.Label
-    $label.Location = New-Object System.Drawing.Point(20, $y)
-    $label.Size = New-Object System.Drawing.Size(350, 30)
-    $label.Text = "$location: Loading..."
-    $form.Controls.Add($label)
-    $labels[$location] = $label
-    $y += 40
-}
-
-# Timer to update every second
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 1000
-$timer.Add_Tick({
-    $utcNow = [DateTime]::UtcNow
-    foreach ($location in $timeZones.Keys) {
-        try {
-            $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($timeZones[$location])
-            $localTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($utcNow, $tz)
-            $labels[$location].Text = "$location: $($localTime.ToString('yyyy-MM-dd hh:mm:ss tt'))"
-        } catch {
-            $labels[$location].Text = "$location: Error"
-        }
-    }
-})
-$timer.Start()
-
-# Show form
-[void]$form.ShowDialog()
+| makeresults 
+| eval server_list="server1,server2,server3,server4"
+| makemv delim="," server_list
+| mvexpand server_list
+| rename server_list as host
+| join type=left host [
+    search index=your_index earliest=-7d@d latest=now
+    | stats latest(_time) as last_log_time by host
+]
+| eval last_log_time=if(isnull(last_log_time),"NO LOGS IN 7 DAYS",strftime(last_log_time,"%Y-%m-%d %H:%M:%S"))
+| table host last_log_time
+| sort host
