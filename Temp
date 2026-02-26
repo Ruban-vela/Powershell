@@ -1,12 +1,16 @@
-| makeresults 
-| eval server_list="server1,server2,server3,server4"
-| makemv delim="," server_list
-| mvexpand server_list
-| rename server_list as host
-| join type=left host [
-    search index=your_index earliest=-7d@d latest=now
+| inputlookup server_inventory.csv
+| rename host as expected_host
+| join type=left expected_host [
+    search index=winserver_process earliest=-7d@d latest=now
     | stats latest(_time) as last_log_time by host
+    | rename host as expected_host
 ]
-| eval last_log_time=if(isnull(last_log_time),"NO LOGS IN 7 DAYS",strftime(last_log_time,"%Y-%m-%d %H:%M:%S"))
-| table host last_log_time
-| sort host
+| eval last_log_time=strftime(last_log_time,"%Y-%m-%d %H:%M:%S")
+| eval minutes_ago=round((now()-strptime(last_log_time,"%Y-%m-%d %H:%M:%S"))/60)
+| eval status=case(
+    isnull(last_log_time),"DOWN - NO LOGS",
+    minutes_ago>5,"HUNG",
+    true(),"GOOD"
+)
+| table expected_host last_log_time minutes_ago status
+| sort expected_host
