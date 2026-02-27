@@ -1,6 +1,75 @@
-$missing = $csv1 | Where-Object {
-    $name = $_.Hostname.Trim().ToLower()
-    -not ($csv2.Hostname.Trim().ToLower() -contains $name)
+# Import CSV files
+$csv1 = Import-Csv "C:\hosts.csv"
+$csv2 = Import-Csv "C:\host_contacts.csv"
+
+# Normalize function (trim + lowercase + remove trailing symbols)
+function Normalize-HostName {
+    param ($name)
+    if (-not $name) { return $null }
+    return (
+        $name.Trim().ToLower() -replace '[^a-zA-Z0-9\-\.]+$', ''
+    )
 }
 
-$missing
+# Build lookup from CSV1
+$lookup = @{}
+foreach ($row in $csv1) {
+    $clean = Normalize-HostName $row.Hostname
+    if ($clean) { $lookup[$clean] = $true }
+}
+
+# Filter matching hosts from CSV2
+$matched = $csv2 | Where-Object {
+    $clean = Normalize-HostName $_.Hostname
+    $lookup.ContainsKey($clean)
+}
+
+# Group by Owner
+$grouped = $matched | Group-Object Owner
+
+# Create Outlook COM object
+$outlook = New-Object -ComObject Outlook.Application
+
+foreach ($group in $grouped) {
+
+    $ownerName = $group.Name
+    $ownerEmail = ($group.Group | Select-Object -First 1).Email
+
+    # Create HTML table for that owner
+    $table = $group.Group |
+             Select-Object Hostname |
+             ConvertTo-Html -Fragment
+
+    # Email body
+    $body = @"
+<html>
+<body>
+Hi $ownerName,<br><br>
+
+Please find your assigned servers below:<br><br>
+
+$table
+
+<div style='margin-top:20px; font-family:Calibri; font-size:14px;'>
+Regards,<br>
+<b>Ruban</b><br>
+Windows Team<br>
+Zapopan
+</div>
+
+</body>
+</html>
+"@
+
+    # Create mail item
+    $mail = $outlook.CreateItem(0)
+    $mail.To = $ownerEmail
+    $mail.Subject = "Server Ownership Details"
+    $mail.HTMLBody = $body
+
+    # Use Display() first for testing
+    $mail.Display()
+
+    # After testing, replace above line with:
+    # $mail.Send()
+}
