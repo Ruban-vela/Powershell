@@ -1,41 +1,23 @@
-$tableStyled = $tableStyled -replace '<tr><td>', '<tr style="background-color:#f9f9f9;"><td>'
-
-$tableStyled = $saftable -replace '<table>', '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse; font-family:Calibri; font-size:14px;">'
-    # Create HTML table for that owner
-    $table = $group.Group |
-             Select-Object Hostname |
-             ConvertTo-Html -Fragment
-
-    # Email body
-    $body = @"
-<html>
-<body>
-Hi $ownerName,<br><br>
-
-Please find your assigned servers below:<br><br>
-
-$table
-
-<div style='margin-top:20px; font-family:Calibri; font-size:14px;'>
-Regards,<br>
-<b>Ruban</b><br>
-Windows Team<br>
-Zapopan
-</div>
-
-</body>
-</html>
-"@
-
-    # Create mail item
-    $mail = $outlook.CreateItem(0)
-    $mail.To = $ownerEmail
-    $mail.Subject = "Server Ownership Details"
-    $mail.HTMLBody = $body
-
-    # Use Display() first for testing
-    $mail.Display()
-
-    # After testing, replace above line with:
-    # $mail.Send()
-}
+index=winserver_process splunk_server_group=* instance=System earliest=-7d latest=now
+[ | inputlookup backupreport_web.csv where backup_enabled="YES"
+  | rename Hostname as host
+  | fields host backup_enabled ]
+| stats latest(_time) as last_log_time by host backup_enabled
+| append [
+    | inputlookup backupreport_web.csv where backup_enabled="YES"
+    | rename Hostname as host
+    | eval last_log_time=null()
+    | fields host backup_enabled last_log_time
+]
+| stats max(last_log_time) as last_log_time values(backup_enabled) as backup_enabled by host
+| eval minutes_ago = round((now() - last_log_time)/60)
+| eval check = case(
+    isnull(last_log_time), "DOWN",
+    minutes_ago > 5, "HUNG",
+    true(), "GOOD"
+)
+| eval last_log_time = strftime(last_log_time, "%Y-%m-%d %H:%M:%S")
+| eval host=lower(host)
+| dedup host
+| table host, backup_enabled, last_log_time, minutes_ago, check
+| sort check
