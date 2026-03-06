@@ -1,23 +1,12 @@
-index=winserver_process splunk_server_group=* instance=System earliest=-7d latest=now
-[ | inputlookup backupreport_web.csv where backup_enabled="YES"
-  | rename Hostname as host
-  | fields host backup_enabled ]
-| stats latest(_time) as last_log_time by host backup_enabled
-| append [
-    | inputlookup backupreport_web.csv where backup_enabled="YES"
-    | rename Hostname as host
-    | eval last_log_time=null()
-    | fields host backup_enabled last_log_time
-]
-| stats max(last_log_time) as last_log_time values(backup_enabled) as backup_enabled by host
-| eval minutes_ago = round((now() - last_log_time)/60)
-| eval check = case(
-    isnull(last_log_time), "DOWN",
-    minutes_ago > 5, "HUNG",
-    true(), "GOOD"
-)
-| eval last_log_time = strftime(last_log_time, "%Y-%m-%d %H:%M:%S")
-| eval host=lower(host)
-| dedup host
-| table host, backup_enabled, last_log_time, minutes_ago, check
-| sort check
+$servers = Get-Content "servers.txt"
+$chunkSize = 500
+$index = 1
+
+for ($i = 0; $i -lt $servers.Count; $i += $chunkSize) {
+
+    $chunk = $servers[$i..([math]::Min($i + $chunkSize - 1, $servers.Count - 1))]
+
+    $chunk | Out-File "servers_part$index.txt"
+
+    $index++
+}
