@@ -1,12 +1,205 @@
-$servers = Get-Content "servers.txt"
-$chunkSize = 500
-$index = 1
+Here's a comprehensive PowerShell script that compares source and destination copy progress:
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$Source,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$Destination,
+    
+    [int]$RefreshSeconds = 5
+)
 
-for ($i = 0; $i -lt $servers.Count; $i += $chunkSize) {
+function Get-FolderStats {
+    param([string]$Path)
+    
+    if (-not (Test-Path $Path)) {
+        return @{ FileCount = 0; TotalSize = 0; Files = @() }
+    }
 
-    $chunk = $servers[$i..([math]::Min($i + $chunkSize - 1, $servers.Count - 1))]
+    $files = Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue
+    $totalSize = ($files | Measure-Object -Property Length -Sum).Sum
+    if (-not $totalSize) { $totalSize = 0 }
 
-    $chunk | Out-File "servers_part$index.txt"
-
-    $index++
+    return @{
+        FileCount = $files.Count
+        TotalSize = $totalSize
+        Files     = $files
+    }
 }
+
+function Format-Size {
+    param([long]$Bytes)
+    switch ($Bytes) {
+        { $_ -ge 1TB } { return "{0:N2} TB" -f ($_ / 1TB) }
+        { $_ -ge 1GB } { return "{0:N2} GB" -f ($_ / 1GB) }
+        { $_ -ge 1MB } { return "{0:N2} MB" -f ($_ / 1MB) }
+        { $_ -ge 1KB } { return "{0:N2} KB" -f ($_ / 1KB) }
+        default        { return "$_ Bytes" }
+    }
+}
+
+function Draw-ProgressBar {
+    param(
+        [double]$Percent,
+        [int]$Width = 40
+    )
+    $filled = [math]::Round(($Percent / 100) * $Width)
+    $empty  = $Width - $filled
+    $bar    = "[" + ("#" * $filled) + ("-" * $empty) + "]"
+    return $bar
+}
+
+function Get-FileDifferences {
+    param(
+        [string]$SourcePath,
+        [string]$DestPath,
+        [array]$SourceFiles
+    )
+
+    $missing   = @()
+    $different = @()
+    $matched   = @()
+
+    foreach ($file in $SourceFiles) {
+        $relativePath = $file.FullName.Substring($SourcePath.Length).TrimStart('\','/')
+        $destFile     = Join-Path $DestPath $relativePath
+
+        if (-not (Test-Path $destFile)) {
+            $missing += $relativePath
+        } else {
+            $destInfo = Get-Item $destFile
+            if ($file.Length -ne $destInfo.Length) {
+                $different += $relativePath
+            } else {
+                $matched += $relativePath
+            }
+        }
+    }
+
+    return @{
+        Missing   = $missing
+        Different = $different
+        Matched   = $matched
+    }
+}
+
+# ── Main Loop ──────────────────────────────────────────────────────────────────
+Write-Host "`n=== Copy Progress Monitor ===" -ForegroundColor Cyan
+Write-Host "Source      : $Source"
+Write-Host "Destination : $Destination"
+Write-Host "Refresh     : Every $RefreshSeconds seconds"
+Write-Host "Press Ctrl+C to stop monitoring.`n" -ForegroundColor Yellow
+
+$startTime = Get-Date
+
+while ($true) {
+    $srcStats  = Get-FolderStats -Path $Source
+    $dstStats  = Get-FolderStats -Path $Destination
+    $elapsed   = (Get-Date) - $startTime
+    $now       = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+    # ── Calculate Progress ─────────────────────────────────────────────────────
+    $fileProgress = if ($srcStats.FileCount -gt 0) {
+        [math]::Round(($dstStats.FileCount / $srcStats.FileCount) * 100, 2)
+    } else { 0 }
+
+    $sizeProgress = if ($srcStats.TotalSize -gt 0) {
+        [math]::Round(($dstStats.TotalSize / $srcStats.TotalSize) * 100, 2)
+    } else { 0 }
+
+    $fileBar = Draw-ProgressBar -Percent $fileProgress
+    $sizeBar = Draw-ProgressBar -Percent $sizeProgress
+
+    # ── File Diff Analysis ─────────────────────────────────────────────────────
+    $diff = Get-FileDifferences -SourcePath $Source -DestPath $Destination -SourceFiles $srcStats.Files
+
+    # ── Remaining Estimate ─────────────────────────────────────────────────────
+    $remainingSize = $srcStats.TotalSize - $dstStats.TotalSize
+    $etaText = "Calculating..."
+
+    if ($elapsed.TotalSeconds -gt 10 -and $dstStats.TotalSize -gt 0) {
+        $bytePerSec = $dstStats.TotalSize / $elapsed.TotalSeconds
+        if ($bytePerSec -gt 0 -and $remainingSize -gt 0) {
+            $etaSec  = [math]::Round($remainingSize / $bytePerSec)
+            $etaSpan = [TimeSpan]::FromSeconds($etaSec)
+            $etaText = "{0:D2}h {1:D2}m {2:D2}s" -f $etaSpan.Hours, $etaSpan.Minutes, $etaSpan.Seconds
+        } elseif ($remainingSize -le 0) {
+            $etaText = "Complete"
+        }
+    }
+
+    # ── Render Output ──────────────────────────────────────────────────────────
+    Clear-Host
+    Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║           COPY PROGRESS MONITOR                     ║" -ForegroundColor Cyan
+    Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Timestamp : $now"
+    Write-Host "  Elapsed   : $($elapsed.ToString('hh\:mm\:ss'))"
+    Write-Host "  ETA       : $etaText" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  ── Source ───────────────────────────────────────────" -ForegroundColor Green
+    Write-Host "  Path       : $Source"
+    Write-Host "  Files      : $($srcStats.FileCount)"
+    Write-Host "  Total Size : $(Format-Size $srcStats.TotalSize)"
+    Write-Host ""
+    Write-Host "  ── Destination ──────────────────────────────────────" -ForegroundColor Blue
+    Write-Host "  Path       : $Destination"
+    Write-Host "  Files      : $($dstStats.FileCount)"
+    Write-Host "  Total Size : $(Format-Size $dstStats.TotalSize)"
+    Write-Host ""
+    Write-Host "  ── Progress ─────────────────────────────────────────" -ForegroundColor Magenta
+    Write-Host ("  Files  {0,6}%  {1}" -f $fileProgress, $fileBar)
+    Write-Host ("  Size   {0,6}%  {1}" -f $sizeProgress, $sizeBar)
+    Write-Host ""
+    Write-Host "  ── File Status ──────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "  Matched    : $($diff.Matched.Count)   files copied correctly" -ForegroundColor Green
+    Write-Host "  Missing    : $($diff.Missing.Count)   files not yet copied" -ForegroundColor Red
+    Write-Host "  Different  : $($diff.Different.Count)   files size mismatch (in-progress or changed)" -ForegroundColor DarkYellow
+    Write-Host ""
+
+    # Show top 5 missing files
+    if ($diff.Missing.Count -gt 0) {
+        Write-Host "  ── Pending Files (top 5) ────────────────────────────" -ForegroundColor Red
+        $diff.Missing | Select-Object -First 5 | ForEach-Object {
+            Write-Host "    - $_" -ForegroundColor DarkRed
+        }
+        Write-Host ""
+    }
+
+    # ── Completion Check ───────────────────────────────────────────────────────
+    if ($fileProgress -ge 100 -and $sizeProgress -ge 100 -and $diff.Missing.Count -eq 0) {
+        Write-Host "  ✔ COPY COMPLETE — All files matched!" -ForegroundColor Green
+        Write-Host ""
+        break
+    }
+
+    Start-Sleep -Seconds $RefreshSeconds
+}
+How to Use
+Save as CopyMonitor.ps1 and run:
+# Basic usage
+.\CopyMonitor.ps1 -Source "D:\Data" -Destination "E:\Backup"
+
+# Custom refresh rate (every 10 seconds)
+.\CopyMonitor.ps1 -Source "D:\Data" -Destination "\\Server\Share\Backup" -RefreshSeconds 10
+What It Shows
+Metric
+Description
+File Count
+Source vs Destination file count
+Total Size
+Bytes copied vs total
+Progress Bars
+Visual % for both files and size
+ETA
+Estimated time remaining based on speed
+Matched
+Files fully copied and size-verified
+Missing
+Files not yet on destination
+Different
+Files partially copied or size mismatch
+Pending list
+Top 5 files still waiting to copy
+The script auto-exits when all files are matched and progress hits 100%. It works for both local paths and UNC network shares.
