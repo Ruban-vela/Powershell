@@ -1,29 +1,29 @@
-Here's a comprehensive PowerShell script that compares source and destination copy progress:
+Got it! Here's a modified version that works with just the **destination folder + a known file count and size**:
+
+```powershell
 param(
     [Parameter(Mandatory=$true)]
-    [string]$Source,
-    
-    [Parameter(Mandatory=$true)]
     [string]$Destination,
-    
+
+    [Parameter(Mandatory=$true)]
+    [int]$ExpectedFileCount,
+
+    [Parameter(Mandatory=$true)]
+    [string]$ExpectedTotalSize,   # e.g. "10GB", "500MB", "1.5TB"
+
     [int]$RefreshSeconds = 5
 )
 
-function Get-FolderStats {
-    param([string]$Path)
-    
-    if (-not (Test-Path $Path)) {
-        return @{ FileCount = 0; TotalSize = 0; Files = @() }
-    }
-
-    $files = Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue
-    $totalSize = ($files | Measure-Object -Property Length -Sum).Sum
-    if (-not $totalSize) { $totalSize = 0 }
-
-    return @{
-        FileCount = $files.Count
-        TotalSize = $totalSize
-        Files     = $files
+function Parse-Size {
+    param([string]$SizeStr)
+    $SizeStr = $SizeStr.Trim().ToUpper()
+    switch -Regex ($SizeStr) {
+        '(\d+\.?\d*)\s*TB' { return [long]([double]$Matches[1] * 1TB) }
+        '(\d+\.?\d*)\s*GB' { return [long]([double]$Matches[1] * 1GB) }
+        '(\d+\.?\d*)\s*MB' { return [long]([double]$Matches[1] * 1MB) }
+        '(\d+\.?\d*)\s*KB' { return [long]([double]$Matches[1] * 1KB) }
+        '(\d+\.?\d*)\s*B'  { return [long]$Matches[1] }
+        default { throw "Invalid size format. Use: 10GB, 500MB, 1.5TB etc." }
     }
 }
 
@@ -35,6 +35,159 @@ function Format-Size {
         { $_ -ge 1MB } { return "{0:N2} MB" -f ($_ / 1MB) }
         { $_ -ge 1KB } { return "{0:N2} KB" -f ($_ / 1KB) }
         default        { return "$_ Bytes" }
+    }
+}
+
+function Draw-ProgressBar {
+    param([double]$Percent, [int]$Width = 40)
+    $Percent = [math]::Min($Percent, 100)
+    $filled  = [math]::Round(($Percent / 100) * $Width)
+    $empty   = $Width - $filled
+    return "[" + ("#" * $filled) + ("-" * $empty) + "]"
+}
+
+function Get-FolderStats {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) {
+        return @{ FileCount = 0; TotalSize = 0 }
+    }
+    $files     = Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue
+    $totalSize = ($files | Measure-Object -Property Length -Sum).Sum
+    if (-not $totalSize) { $totalSize = 0 }
+    return @{
+        FileCount = $files.Count
+        TotalSize = [long]$totalSize
+    }
+}
+
+# ── Parse expected size input ──────────────────────────────────────────────────
+try {
+    $expectedBytes = Parse-Size -SizeStr $ExpectedTotalSize
+} catch {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    exit 1
+}
+
+$startTime = Get-Date
+
+Write-Host "`n=== Copy Progress Monitor (Destination Only Mode) ===" -ForegroundColor Cyan
+Write-Host "Destination    : $Destination"
+Write-Host "Expected Files : $ExpectedFileCount"
+Write-Host "Expected Size  : $(Format-Size $expectedBytes)"
+Write-Host "Refresh        : Every $RefreshSeconds seconds"
+Write-Host "Press Ctrl+C to stop.`n" -ForegroundColor Yellow
+
+while ($true) {
+    $dstStats  = Get-FolderStats -Path $Destination
+    $elapsed   = (Get-Date) - $startTime
+    $now       = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+    # ── Progress Calculations ──────────────────────────────────────────────────
+    $fileProgress = if ($ExpectedFileCount -gt 0) {
+        [math]::Round(($dstStats.FileCount / $ExpectedFileCount) * 100, 2)
+    } else { 0 }
+
+    $sizeProgress = if ($expectedBytes -gt 0) {
+        [math]::Round(($dstStats.TotalSize / $expectedBytes) * 100, 2)
+    } else { 0 }
+
+    $remainingFiles = [math]::Max($ExpectedFileCount - $dstStats.FileCount, 0)
+    $remainingSize  = [math]::Max($expectedBytes - $dstStats.TotalSize, 0)
+
+    # ── ETA Calculation ────────────────────────────────────────────────────────
+    $etaText    = "Calculating..."
+    $copySpeed  = "N/A"
+
+    if ($elapsed.TotalSeconds -gt 5 -and $dstStats.TotalSize -gt 0) {
+        $bytePerSec = $dstStats.TotalSize / $elapsed.TotalSeconds
+        $copySpeed  = "$(Format-Size ([long]$bytePerSec))/s"
+
+        if ($bytePerSec -gt 0 -and $remainingSize -gt 0) {
+            $etaSec  = [math]::Round($remainingSize / $bytePerSec)
+            $etaSpan = [TimeSpan]::FromSeconds($etaSec)
+            $etaText = "{0:D2}h {1:D2}m {2:D2}s" -f $etaSpan.Hours, $etaSpan.Minutes, $etaSpan.Seconds
+        } elseif ($remainingSize -le 0) {
+            $etaText = "Complete"
+        }
+    }
+
+    $fileBar = Draw-ProgressBar -Percent $fileProgress
+    $sizeBar = Draw-ProgressBar -Percent $sizeProgress
+
+    # ── Render Display ─────────────────────────────────────────────────────────
+    Clear-Host
+    Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║       COPY PROGRESS MONITOR — DEST ONLY MODE        ║" -ForegroundColor Cyan
+    Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Timestamp  : $now"
+    Write-Host "  Elapsed    : $($elapsed.ToString('hh\:mm\:ss'))"
+    Write-Host "  Copy Speed : $copySpeed"          -ForegroundColor Cyan
+    Write-Host "  ETA        : $etaText"            -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  ── Expected (Source Info) ───────────────────────────" -ForegroundColor Green
+    Write-Host "  Total Files : $ExpectedFileCount"
+    Write-Host "  Total Size  : $(Format-Size $expectedBytes)"
+    Write-Host ""
+    Write-Host "  ── Destination (Live) ───────────────────────────────" -ForegroundColor Blue
+    Write-Host "  Path        : $Destination"
+    Write-Host "  Files Done  : $($dstStats.FileCount)  /  $ExpectedFileCount  ($remainingFiles remaining)"
+    Write-Host "  Size Done   : $(Format-Size $dstStats.TotalSize)  /  $(Format-Size $expectedBytes)  ($(Format-Size $remainingSize) remaining)"
+    Write-Host ""
+    Write-Host "  ── Progress ─────────────────────────────────────────" -ForegroundColor Magenta
+    Write-Host ("  Files  {0,6}%  {1}" -f $fileProgress, $fileBar)
+    Write-Host ("  Size   {0,6}%  {1}" -f $sizeProgress, $sizeBar)
+    Write-Host ""
+
+    # ── Warnings ───────────────────────────────────────────────────────────────
+    if ($fileProgress -ge 100 -and $sizeProgress -lt 95) {
+        Write-Host "  ⚠ WARNING: File count matched but size is less than expected." -ForegroundColor Red
+        Write-Host "             Some files may be incomplete or smaller than source." -ForegroundColor DarkRed
+        Write-Host ""
+    }
+
+    if ($sizeProgress -gt 100) {
+        Write-Host "  ⚠ WARNING: Destination size EXCEEDS expected. Check for extra files." -ForegroundColor Red
+        Write-Host ""
+    }
+
+    # ── Completion Check ───────────────────────────────────────────────────────
+    if ($dstStats.FileCount -ge $ExpectedFileCount -and $dstStats.TotalSize -ge $expectedBytes) {
+        Write-Host "  ✔ COPY COMPLETE — File count and size match expected values!" -ForegroundColor Green
+        Write-Host ""
+        break
+    }
+
+    Start-Sleep -Seconds $RefreshSeconds
+}
+```
+
+---
+
+## How to Run
+
+```powershell
+# You only need to provide what you know about the source
+.\CopyMonitor.ps1 -Destination "E:\Backup" -ExpectedFileCount 1500 -ExpectedTotalSize "10GB"
+
+# With custom refresh
+.\CopyMonitor.ps1 -Destination "\\Server\Share" -ExpectedFileCount 300 -ExpectedTotalSize "1.5TB" -RefreshSeconds 10
+```
+
+---
+
+## What Changed vs Previous Script
+
+| Feature | Previous | This Version |
+|---|---|---|
+| Source folder access | Required | ❌ Not needed |
+| Expected file count | Auto-detected | ✅ You provide it |
+| Expected size | Auto-detected | ✅ You provide it (`10GB`, `500MB`) |
+| Copy speed | No | ✅ Shows MB/s or GB/s |
+| Size mismatch warning | No | ✅ Warns if count matches but size doesn't |
+| Oversize warning | No | ✅ Warns if destination exceeds expected |
+
+The script accepts size in **KB, MB, GB, TB** format and will warn you if something looks off even after file count reaches 100%.        default        { return "$_ Bytes" }
     }
 }
 
