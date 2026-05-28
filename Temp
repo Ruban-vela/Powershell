@@ -356,3 +356,4 @@ Files partially copied or size mismatch
 Pending list
 Top 5 files still waiting to copy
 The script auto-exits when all files are matched and progress hits 100%. It works for both local paths and UNC network shares.
+=TRIM(MID(A1, FIND(" ", A1)+1, FIND(".", A1, FIND(" ", A1))-FIND(" ", A1)-1))
