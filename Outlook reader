@@ -1,0 +1,70 @@
+$outlook = New-Object -ComObject Outlook.Application
+$selection = $outlook.ActiveExplorer().Selection
+
+if ($selection.Count -eq 0) {
+    Write-Warning "Please select the email in Outlook first."
+    Exit
+}
+
+$mail = $selection.Item(1)
+$htmlDoc = New-Object -ComObject "HTMLFile"
+$htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
+
+$tables = $htmlDoc.getElementsByTagName("table")
+$records = @()
+
+foreach ($table in $tables) {
+    # Find heading before the table
+    $heading = "General Task"
+    $sibling = $table.previousSibling
+    while ($sibling) {
+        $text = $sibling.innerText
+        if ($text -match "Python|SCCM|TASK") {
+            $heading = $text.Trim()
+            break
+        }
+        $sibling = $sibling.previousSibling
+    }
+
+    $rows = $table.rows
+    if ($rows.length -lt 2) { continue }
+
+    # Extract headers
+    $headers = @()
+    for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
+        $headers += $rows.item(0).cells.item($c).innerText.Trim()
+    }
+
+    $execIdx = $headers.IndexOf("Executor")
+    if ($execIdx -eq -1) {
+        # Check case-insensitive
+        for ($i = 0; $i -lt $headers.Count; $i++) {
+            if ($headers[$i] -like "*Executor*") { $execIdx = $i; break }
+        }
+    }
+
+    if ($execIdx -ne -1) {
+        for ($r = 1; $r -lt $rows.length; $r++) {
+            $cells = $rows.item($r).cells
+            if ($cells.length -gt $execIdx) {
+                $executor = $cells.item($execIdx).innerText.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($executor)) {
+                    $rowObj = [ordered]@{
+                        "Heading"  = $heading
+                        "Executor" = $executor
+                    }
+                    for ($c = 0; $c -lt $cells.length; $c++) {
+                        $colName = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
+                        $rowObj[$colName] = $cells.item($c).innerText.Trim()
+                    }
+                    $records += [PSCustomObject]$rowObj
+                }
+            }
+        }
+    }
+}
+
+# Display filtered by a specific executor or export
+$records | Out-GridView
+# To export to CSV:
+# $records | Export-Csv -Path "Executor_Tasks.csv" -NoTypeInformation
