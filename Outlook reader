@@ -2,7 +2,7 @@ $outlook = New-Object -ComObject Outlook.Application
 $selection = $outlook.ActiveExplorer().Selection
 
 if ($selection.Count -eq 0) {
-    Write-Warning "Please select the email in Outlook first."
+    Write-Warning "Please select the target email in Outlook first."
     Exit
 }
 
@@ -11,74 +11,100 @@ $htmlDoc = New-Object -ComObject "HTMLFile"
 $htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
 
 $tables = $htmlDoc.getElementsByTagName("table")
-$allRecords = @()
-$tableCounter = 0
+$masterRecords = @()
+$tableCount = 0
 
 foreach ($table in $tables) {
-    $tableCounter++
-    
-    # 1. Search backwards for heading
+    $tableCount++
+
+    # 1. Search backwards and skip "Note:..." or instruction lines
     $heading = ""
     $sibling = $table.previousSibling
     while ($sibling) {
         $text = $sibling.innerText
-        if (-not [string]::IsNullOrWhiteSpace($text) -and ($text -match "TASK|BIOS|Manual|Remediation|Patch|TCM|Change|Python|SCCM")) {
-            $heading = ($text -replace '\s+', ' ').Trim()
-            break
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            $trimmed = ($text -replace '\s+', ' ').Trim()
+            
+            # Skip note banners, instructions, and empty sheet markers
+            if ($trimmed -notmatch "^(?i)note\b|please update|confidential info|in sheet") {
+                if ($trimmed -match "TASK|BIOS|Manual|Remediation|Patch|TCM|Change|Python|SCCM|Install|Repair") {
+                    $heading = $trimmed
+                    break
+                }
+            }
         }
         $sibling = $sibling.previousSibling
     }
 
     if ([string]::IsNullOrWhiteSpace($heading)) {
-        $heading = if ($tableCounter -eq 1) { "TCM_Change_Schedule" } else { "Task_Table_$tableCounter" }
+        $heading = if ($tableCount -eq 1) { "TCM Change Schedule" } else { "Task Table $tableCount" }
     }
 
     $rows = $table.rows
     if ($rows.length -lt 2) { continue }
 
-    # 2. Extract this table's specific headers
+    # 2. Extract column headers
     $headers = @()
     for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
-        $hName = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
-        if ([string]::IsNullOrWhiteSpace($hName)) { $hName = "Col_$c" }
-        $headers += $hName
+        $h = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($h)) { $h = "Col_$c" }
+        $headers += $h
     }
 
-    # 3. Locate Executor index (handles both "Primary Executor" and "Executor")
+    # 3. Locate Executor column
     $execIdx = -1
     for ($i = 0; $i -lt $headers.Count; $i++) {
-        if ($headers[$i] -match "(?i)executor") { 
-            $execIdx = $i 
-            break 
-        }
+        if ($headers[$i] -match "(?i)executor") { $execIdx = $i; break }
     }
     if ($execIdx -eq -1) { continue }
 
-    # 4. Extract data rows
+    # 4. Extract rows
     for ($r = 1; $r -lt $rows.length; $r++) {
         $cells = $rows.item($r).cells
         if ($cells.length -gt $execIdx) {
             $executor = ($cells.item($execIdx).innerText -replace '\s+', ' ').Trim()
-            
             if (-not [string]::IsNullOrWhiteSpace($executor)) {
-                $rowObj = [ordered]@{
-                    "Task_Heading"      = $heading
-                    "Assigned_Executor" = $executor
-                }
-
+                
+                $rowDict = @{}
                 for ($c = 0; $c -lt $cells.length; $c++) {
-                    $propKey = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
-                    $rowObj[$propKey] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
+                    $key = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
+                    $rowDict[$key] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
                 }
 
-                $allRecords += [PSCustomObject]$rowObj
+                # Resolve Server Name
+                $serverName = ""
+                foreach ($k in $rowDict.Keys) {
+                    if ($k -match "(?i)server\s*name") { $serverName = $rowDict[$k]; break }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($serverName) -and $rowDict.ContainsKey("Summary")) {
+                    $matches = [regex]::Matches($rowDict["Summary"], "\b[a-zA-Z]{3,7}\d{3,8}[a-zA-Z0-9]*\b")
+                    if ($matches.Count -gt 0) {
+                        $serverName = ($matches | ForEach-Object { $_.Value } | Select-Object -Unique) -join ", "
+                    } else {
+                        $serverName = $rowDict["TCM"]
+                    }
+                }
+
+                $shiftVal = if ($rowDict.ContainsKey("Shift")) { $rowDict["Shift"] } else { $rowDict["IST Shift/Mexico"] }
+
+                $rowObj = [ordered]@{
+                    "Heading"     = $heading
+                    "Executor"    = $executor
+                    "Server Name" = $serverName
+                    "Shift"       = $shiftVal
+                }
+
+                foreach ($k in $rowDict.Keys) {
+                    if (-not $rowObj.Contains($k)) {
+                        $rowObj[$k] = $rowDict[$k]
+                    }
+                }
+
+                $masterRecords += [PSCustomObject]$rowObj
             }
         }
     }
 }
 
-# View output in a filterable grid
-$allRecords | Out-GridView -Title "All Outlook Tasks"
-
-# Example: Filter all tasks assigned to Lakshmi or Karthik across all tables
-# $allRecords | Where-Object { $_.Assigned_Executor -match "Lakshmi|Karthik" } | Out-GridView
+$masterRecords | Out-GridView -Title "Tasks (Cleaned Headings)"
