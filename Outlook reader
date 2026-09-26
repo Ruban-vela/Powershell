@@ -11,16 +11,16 @@ $htmlDoc = New-Object -ComObject "HTMLFile"
 $htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
 
 $tables = $htmlDoc.getElementsByTagName("table")
-$allRecords = @()
+$records = @()
 
 foreach ($table in $tables) {
-    # 1. Find heading above current table
+    # 1. Identify heading
     $heading = "General Task"
     $sibling = $table.previousSibling
     while ($sibling) {
         $text = $sibling.innerText
-        if (-not [string]::IsNullOrWhiteSpace($text) -and $text -match "TASK|Repair|Install|Config") {
-            $heading = $text.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text) -and $text -match "TASK|Python|SCCM|Repair") {
+            $heading = ($text -replace '\s+', ' ').Trim()
             break
         }
         $sibling = $sibling.previousSibling
@@ -29,18 +29,17 @@ foreach ($table in $tables) {
     $rows = $table.rows
     if ($rows.length -lt 2) { continue }
 
-    # 2. Extract unique headers for THIS specific table
-    $currentHeaders = @()
+    # 2. Extract this table's exact column names
+    $headers = @()
     for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
-        $headerName = $rows.item(0).cells.item($c).innerText.Trim()
-        if ([string]::IsNullOrWhiteSpace($headerName)) { $headerName = "Column_$c" }
-        $currentHeaders += $headerName
+        $name = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
+        $headers += $name
     }
 
     # Find the Executor index dynamically
     $execIdx = -1
-    for ($i = 0; $i -lt $currentHeaders.Count; $i++) {
-        if ($currentHeaders[$i] -match "(?i)executor") { 
+    for ($i = 0; $i -lt $headers.Count; $i++) {
+        if ($headers[$i] -match "(?i)executor") { 
             $execIdx = $i 
             break 
         }
@@ -48,36 +47,32 @@ foreach ($table in $tables) {
 
     if ($execIdx -eq -1) { continue }
 
-    # 3. Read data rows
+    # 3. Build key-value pairs
     for ($r = 1; $r -lt $rows.length; $r++) {
         $cells = $rows.item($r).cells
         if ($cells.length -gt $execIdx) {
-            $executor = $cells.item($execIdx).innerText.Trim()
+            $executor = ($cells.item($execIdx).innerText -replace '\s+', ' ').Trim()
             
             if (-not [string]::IsNullOrWhiteSpace($executor)) {
-                # Dynamically construct object with standard columns first
-                $rowProps = [ordered]@{
-                    "Task_Heading" = $heading
-                    "Executor"     = $executor
+                $rowObj = [ordered]@{
+                    "Heading"           = $heading
+                    "Executor_Assigned" = $executor
                 }
 
-                # Add each column present in this table
+                # Dynamically assign each cell to its column header
                 for ($c = 0; $c -lt $cells.length; $c++) {
-                    $propName = if ($c -lt $currentHeaders.Count) { $currentHeaders[$c] } else { "Column_$c" }
-                    # Avoid overwriting Executor if it matches the header name
-                    if ($propName -ne "Executor") {
-                        $rowProps[$propName] = $cells.item($c).innerText.Trim()
-                    }
+                    $headerKey = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
+                    $rowObj[$headerKey] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
                 }
 
-                $allRecords += [PSCustomObject]$rowProps
+                $records += [PSCustomObject]$rowObj
             }
         }
     }
 }
 
-# View all extracted rows interactively
-$allRecords | Out-GridView -Title "Extracted Tasks by Executor"
+# View output in a GUI window
+$records | Out-GridView -Title "Tasks Normalized Across Tables"
 
-# Filter by a specific executor (e.g., 'Rajesh')
-# $allRecords | Where-Object { $_.Executor -like "*Rajesh*" } | Out-GridView
+# Filter by an executor, e.g., 'rajesh'
+$records | Where-Object { $_.Executor_Assigned -match "rajesh" } | Format-Table Heading, "Server Name", Shift, "IST Start Time", "Mexico Start Time"
