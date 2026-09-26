@@ -1,3 +1,11 @@
+param (
+    [Parameter(Mandatory=$true)]
+    [string]$Executor,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Shift
+)
+
 $outlook = New-Object -ComObject Outlook.Application
 $selection = $outlook.ActiveExplorer().Selection
 
@@ -11,100 +19,105 @@ $htmlDoc = New-Object -ComObject "HTMLFile"
 $htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
 
 $tables = $htmlDoc.getElementsByTagName("table")
-$masterRecords = @()
-$tableCount = 0
+$tableIdx = 0
 
 foreach ($table in $tables) {
-    $tableCount++
+    $tableIdx++
 
-    # 1. Search backwards and skip "Note:..." or instruction lines
+    # 1. Heading Detection
     $heading = ""
     $sibling = $table.previousSibling
     while ($sibling) {
         $text = $sibling.innerText
         if (-not [string]::IsNullOrWhiteSpace($text)) {
-            $trimmed = ($text -replace '\s+', ' ').Trim()
-            
-            # Skip note banners, instructions, and empty sheet markers
-            if ($trimmed -notmatch "^(?i)note\b|please update|confidential info|in sheet") {
-                if ($trimmed -match "TASK|BIOS|Manual|Remediation|Patch|TCM|Change|Python|SCCM|Install|Repair") {
-                    $heading = $trimmed
+            $clean = ($text -replace '\s+', ' ').Trim()
+            if ($clean -notmatch "^(?i)note\b|please update|confidential info|in sheet") {
+                if ($clean -match "TASK|BIOS|Manual|Remediation|Patch|TCM|Change|Python|SCCM|Install|Repair") {
+                    $heading = $clean
                     break
                 }
             }
         }
         $sibling = $sibling.previousSibling
     }
-
     if ([string]::IsNullOrWhiteSpace($heading)) {
-        $heading = if ($tableCount -eq 1) { "TCM Change Schedule" } else { "Task Table $tableCount" }
+        $heading = if ($tableIdx -eq 1) { "TCM Change Schedule" } else { "Task Table $tableIdx" }
     }
 
     $rows = $table.rows
     if ($rows.length -lt 2) { continue }
 
-    # 2. Extract column headers
+    # 2. Extract Table Headers
     $headers = @()
     for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
-        $h = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
-        if ([string]::IsNullOrWhiteSpace($h)) { $h = "Col_$c" }
-        $headers += $h
+        $name = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = "Col_$c" }
+        $headers += $name
     }
 
-    # 3. Locate Executor column
+    # Locate Executor & Shift
     $execIdx = -1
+    $shiftIdx = -1
     for ($i = 0; $i -lt $headers.Count; $i++) {
-        if ($headers[$i] -match "(?i)executor") { $execIdx = $i; break }
+        if ($headers[$i] -match "(?i)executor") { $execIdx = $i }
+        if ($headers[$i] -match "(?i)shift")    { $shiftIdx = $i }
     }
+
     if ($execIdx -eq -1) { continue }
 
-    # 4. Extract rows
+    # 3. Filter Table Rows
+    $tableMatches = @()
     for ($r = 1; $r -lt $rows.length; $r++) {
         $cells = $rows.item($r).cells
         if ($cells.length -gt $execIdx) {
-            $executor = ($cells.item($execIdx).innerText -replace '\s+', ' ').Trim()
-            if (-not [string]::IsNullOrWhiteSpace($executor)) {
+            $rowExec = ($cells.item($execIdx).innerText -replace '\s+', ' ').Trim()
+
+            # Filter Executor
+            if ($rowExec -like "*$Executor*") {
                 
-                $rowDict = @{}
+                # Filter Shift (if specified)
+                if ($Shift -and $shiftIdx -ne -1 -and $cells.length -gt $shiftIdx) {
+                    $rowShift = ($cells.item($shiftIdx).innerText -replace '\s+', ' ').Trim()
+                    if ($rowShift -notlike "*$Shift*") {
+                        continue
+                    }
+                }
+
+                $rowObj = [ordered]@{}
                 for ($c = 0; $c -lt $cells.length; $c++) {
                     $key = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
-                    $rowDict[$key] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
+                    $rowObj[$key] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
                 }
 
-                # Resolve Server Name
-                $serverName = ""
-                foreach ($k in $rowDict.Keys) {
-                    if ($k -match "(?i)server\s*name") { $serverName = $rowDict[$k]; break }
+                # Ensure Server Name
+                $hasServer = $false
+                foreach ($k in $rowObj.Keys) {
+                    if ($k -match "(?i)server\s*name") { $hasServer = $true; break }
                 }
-
-                if ([string]::IsNullOrWhiteSpace($serverName) -and $rowDict.ContainsKey("Summary")) {
-                    $matches = [regex]::Matches($rowDict["Summary"], "\b[a-zA-Z]{3,7}\d{3,8}[a-zA-Z0-9]*\b")
+                if (-not $hasServer -and $rowObj.Contains("Summary")) {
+                    $matches = [regex]::Matches($rowObj["Summary"], "\b[a-zA-Z]{3,7}\d{3,8}[a-zA-Z0-9]*\b")
                     if ($matches.Count -gt 0) {
-                        $serverName = ($matches | ForEach-Object { $_.Value } | Select-Object -Unique) -join ", "
+                        $rowObj["Server Name"] = ($matches | ForEach-Object { $_.Value } | Select-Object -Unique) -join ", "
                     } else {
-                        $serverName = $rowDict["TCM"]
+                        $rowObj["Server Name"] = $rowObj["TCM"]
                     }
                 }
 
-                $shiftVal = if ($rowDict.ContainsKey("Shift")) { $rowDict["Shift"] } else { $rowDict["IST Shift/Mexico"] }
-
-                $rowObj = [ordered]@{
-                    "Heading"     = $heading
-                    "Executor"    = $executor
-                    "Server Name" = $serverName
-                    "Shift"       = $shiftVal
-                }
-
-                foreach ($k in $rowDict.Keys) {
-                    if (-not $rowObj.Contains($k)) {
-                        $rowObj[$k] = $rowDict[$k]
-                    }
-                }
-
-                $masterRecords += [PSCustomObject]$rowObj
+                $tableMatches += [PSCustomObject]$rowObj
             }
         }
     }
-}
 
-$masterRecords | Out-GridView -Title "Tasks (Cleaned Headings)"
+    # 4. Display this individual table separately
+    if ($tableMatches.Count -gt 0) {
+        Write-Host "`n========================================================" -ForegroundColor Cyan
+        Write-Host "TABLE: $heading" -ForegroundColor Yellow
+        Write-Host "Matched Rows: $($tableMatches.Count)" -ForegroundColor Cyan
+        Write-Host "========================================================" -ForegroundColor Cyan
+        
+        $tableMatches | Format-Table -AutoSize
+        
+        # Opens an individual GUI grid view window per table
+        $tableMatches | Out-GridView -Title "$heading - ($Executor)"
+    }
+}
