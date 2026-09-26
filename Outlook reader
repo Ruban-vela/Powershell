@@ -11,15 +11,15 @@ $htmlDoc = New-Object -ComObject "HTMLFile"
 $htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
 
 $tables = $htmlDoc.getElementsByTagName("table")
-$records = @()
+$allRecords = @()
 
 foreach ($table in $tables) {
-    # Find heading before the table
+    # 1. Find heading above current table
     $heading = "General Task"
     $sibling = $table.previousSibling
     while ($sibling) {
         $text = $sibling.innerText
-        if ($text -match "Python|SCCM|TASK") {
+        if (-not [string]::IsNullOrWhiteSpace($text) -and $text -match "TASK|Repair|Install|Config") {
             $heading = $text.Trim()
             break
         }
@@ -29,42 +29,55 @@ foreach ($table in $tables) {
     $rows = $table.rows
     if ($rows.length -lt 2) { continue }
 
-    # Extract headers
-    $headers = @()
+    # 2. Extract unique headers for THIS specific table
+    $currentHeaders = @()
     for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
-        $headers += $rows.item(0).cells.item($c).innerText.Trim()
+        $headerName = $rows.item(0).cells.item($c).innerText.Trim()
+        if ([string]::IsNullOrWhiteSpace($headerName)) { $headerName = "Column_$c" }
+        $currentHeaders += $headerName
     }
 
-    $execIdx = $headers.IndexOf("Executor")
-    if ($execIdx -eq -1) {
-        # Check case-insensitive
-        for ($i = 0; $i -lt $headers.Count; $i++) {
-            if ($headers[$i] -like "*Executor*") { $execIdx = $i; break }
+    # Find the Executor index dynamically
+    $execIdx = -1
+    for ($i = 0; $i -lt $currentHeaders.Count; $i++) {
+        if ($currentHeaders[$i] -match "(?i)executor") { 
+            $execIdx = $i 
+            break 
         }
     }
 
-    if ($execIdx -ne -1) {
-        for ($r = 1; $r -lt $rows.length; $r++) {
-            $cells = $rows.item($r).cells
-            if ($cells.length -gt $execIdx) {
-                $executor = $cells.item($execIdx).innerText.Trim()
-                if (-not [string]::IsNullOrWhiteSpace($executor)) {
-                    $rowObj = [ordered]@{
-                        "Heading"  = $heading
-                        "Executor" = $executor
-                    }
-                    for ($c = 0; $c -lt $cells.length; $c++) {
-                        $colName = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
-                        $rowObj[$colName] = $cells.item($c).innerText.Trim()
-                    }
-                    $records += [PSCustomObject]$rowObj
+    if ($execIdx -eq -1) { continue }
+
+    # 3. Read data rows
+    for ($r = 1; $r -lt $rows.length; $r++) {
+        $cells = $rows.item($r).cells
+        if ($cells.length -gt $execIdx) {
+            $executor = $cells.item($execIdx).innerText.Trim()
+            
+            if (-not [string]::IsNullOrWhiteSpace($executor)) {
+                # Dynamically construct object with standard columns first
+                $rowProps = [ordered]@{
+                    "Task_Heading" = $heading
+                    "Executor"     = $executor
                 }
+
+                # Add each column present in this table
+                for ($c = 0; $c -lt $cells.length; $c++) {
+                    $propName = if ($c -lt $currentHeaders.Count) { $currentHeaders[$c] } else { "Column_$c" }
+                    # Avoid overwriting Executor if it matches the header name
+                    if ($propName -ne "Executor") {
+                        $rowProps[$propName] = $cells.item($c).innerText.Trim()
+                    }
+                }
+
+                $allRecords += [PSCustomObject]$rowProps
             }
         }
     }
 }
 
-# Display filtered by a specific executor or export
-$records | Out-GridView
-# To export to CSV:
-# $records | Export-Csv -Path "Executor_Tasks.csv" -NoTypeInformation
+# View all extracted rows interactively
+$allRecords | Out-GridView -Title "Extracted Tasks by Executor"
+
+# Filter by a specific executor (e.g., 'Rajesh')
+# $allRecords | Where-Object { $_.Executor -like "*Rajesh*" } | Out-GridView
