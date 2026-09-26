@@ -11,32 +11,40 @@ $htmlDoc = New-Object -ComObject "HTMLFile"
 $htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
 
 $tables = $htmlDoc.getElementsByTagName("table")
-$records = @()
+$allRecords = @()
+$tableCounter = 0
 
 foreach ($table in $tables) {
-    # 1. Identify heading
-    $heading = "General Task"
+    $tableCounter++
+    
+    # 1. Search backwards for heading
+    $heading = ""
     $sibling = $table.previousSibling
     while ($sibling) {
         $text = $sibling.innerText
-        if (-not [string]::IsNullOrWhiteSpace($text) -and $text -match "TASK|Python|SCCM|Repair") {
+        if (-not [string]::IsNullOrWhiteSpace($text) -and ($text -match "TASK|BIOS|Manual|Remediation|Patch|TCM|Change|Python|SCCM")) {
             $heading = ($text -replace '\s+', ' ').Trim()
             break
         }
         $sibling = $sibling.previousSibling
     }
 
+    if ([string]::IsNullOrWhiteSpace($heading)) {
+        $heading = if ($tableCounter -eq 1) { "TCM_Change_Schedule" } else { "Task_Table_$tableCounter" }
+    }
+
     $rows = $table.rows
     if ($rows.length -lt 2) { continue }
 
-    # 2. Extract this table's exact column names
+    # 2. Extract this table's specific headers
     $headers = @()
     for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
-        $name = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
-        $headers += $name
+        $hName = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($hName)) { $hName = "Col_$c" }
+        $headers += $hName
     }
 
-    # Find the Executor index dynamically
+    # 3. Locate Executor index (handles both "Primary Executor" and "Executor")
     $execIdx = -1
     for ($i = 0; $i -lt $headers.Count; $i++) {
         if ($headers[$i] -match "(?i)executor") { 
@@ -44,10 +52,9 @@ foreach ($table in $tables) {
             break 
         }
     }
-
     if ($execIdx -eq -1) { continue }
 
-    # 3. Build key-value pairs
+    # 4. Extract data rows
     for ($r = 1; $r -lt $rows.length; $r++) {
         $cells = $rows.item($r).cells
         if ($cells.length -gt $execIdx) {
@@ -55,24 +62,23 @@ foreach ($table in $tables) {
             
             if (-not [string]::IsNullOrWhiteSpace($executor)) {
                 $rowObj = [ordered]@{
-                    "Heading"           = $heading
-                    "Executor_Assigned" = $executor
+                    "Task_Heading"      = $heading
+                    "Assigned_Executor" = $executor
                 }
 
-                # Dynamically assign each cell to its column header
                 for ($c = 0; $c -lt $cells.length; $c++) {
-                    $headerKey = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
-                    $rowObj[$headerKey] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
+                    $propKey = if ($c -lt $headers.Count) { $headers[$c] } else { "Col_$c" }
+                    $rowObj[$propKey] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
                 }
 
-                $records += [PSCustomObject]$rowObj
+                $allRecords += [PSCustomObject]$rowObj
             }
         }
     }
 }
 
-# View output in a GUI window
-$records | Out-GridView -Title "Tasks Normalized Across Tables"
+# View output in a filterable grid
+$allRecords | Out-GridView -Title "All Outlook Tasks"
 
-# Filter by an executor, e.g., 'rajesh'
-$records | Where-Object { $_.Executor_Assigned -match "rajesh" } | Format-Table Heading, "Server Name", Shift, "IST Start Time", "Mexico Start Time"
+# Example: Filter all tasks assigned to Lakshmi or Karthik across all tables
+# $allRecords | Where-Object { $_.Assigned_Executor -match "Lakshmi|Karthik" } | Out-GridView
