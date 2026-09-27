@@ -6,25 +6,83 @@ param (
     [string]$Shift
 )
 
+# 1. Connect to Outlook
 $outlook = New-Object -ComObject Outlook.Application
 $selection = $outlook.ActiveExplorer().Selection
 
 if ($selection.Count -eq 0) {
-    Write-Warning "Please select the target email in Outlook first."
+    Write-Warning "Please select the email thread in Outlook first."
     Exit
 }
 
-$mail = $selection.Item(1)
+$selectedItem = $selection.Item(1)
+$mail = $selectedItem
+
+# 2. Guarantee we are examining the LATEST email in the conversation thread
+try {
+    $conv = $selectedItem.GetConversation()
+    if ($conv -ne $null) {
+        # Retrieve all items in the conversation and sort descending by ReceivedTime
+        $threadItems = $conv.GetRootItems() | ForEach-Object { 
+            $_ ; $conv.GetChildren($_) 
+        } | Where-Object { $_.ReceivedTime } | Sort-Object -Property ReceivedTime -Descending
+
+        if ($threadItems.Count -gt 0) {
+            $mail = $threadItems[0]
+            Write-Host "Evaluating latest message received on: $($mail.ReceivedTime)" -ForegroundColor Green
+        }
+    }
+} catch {
+    # If not part of an active conversation or Exchange store, default to the selected message
+    $mail = $selectedItem
+}
+
+# 3. Truncate previous reply history from HTML body
+$rawHtml = $mail.HTMLBody
+
+# Common reply/forward divider markers inserted by Outlook and Exchange:
+$replyDividerPatterns = @(
+    '(?i)<div\s+id=["'']?divRplyFwdMsg["'']?',
+    '(?i)<hr\b[^>]*>',
+    '(?i)<div\s+style=["''][^"'']*border-top:\s*solid',
+    '(?i)<b>From:</b>',
+    '(?i)-----Original Message-----'
+)
+
+$cutoffIndex = $rawHtml.Length
+
+foreach ($pattern in $replyDividerPatterns) {
+    $match = [regex]::Match($rawHtml, $pattern)
+    if ($match.Success -and $match.Index -lt $cutoffIndex) {
+        $cutoffIndex = $match.Index
+    }
+}
+
+# Slice HTML to retain only content BEFORE the first reply separator
+$latestMessageHtml = if ($cutoffIndex -lt $rawHtml.Length) {
+    $rawHtml.Substring(0, $cutoffIndex)
+} else {
+    $rawHtml
+}
+
+# 4. Load sanitized HTML into DOM
 $htmlDoc = New-Object -ComObject "HTMLFile"
-$htmlDoc.IHTMLDocument2_write($mail.HTMLBody)
+$htmlDoc.IHTMLDocument2_write($latestMessageHtml)
 
 $tables = $htmlDoc.getElementsByTagName("table")
+
+if ($tables.length -eq 0) {
+    Write-Warning "No tables found in the latest message of this thread."
+    Exit
+}
+
 $tableIdx = 0
 
+# 5. Process tables from the latest message only
 foreach ($table in $tables) {
     $tableIdx++
 
-    # 1. Heading Detection
+    # Heading Detection
     $heading = ""
     $sibling = $table.previousSibling
     while ($sibling) {
@@ -47,7 +105,7 @@ foreach ($table in $tables) {
     $rows = $table.rows
     if ($rows.length -lt 2) { continue }
 
-    # 2. Extract Table Headers
+    # Extract Table Headers
     $headers = @()
     for ($c = 0; $c -lt $rows.item(0).cells.length; $c++) {
         $name = ($rows.item(0).cells.item($c).innerText -replace '\s+', ' ').Trim()
@@ -65,17 +123,15 @@ foreach ($table in $tables) {
 
     if ($execIdx -eq -1) { continue }
 
-    # 3. Filter Table Rows
+    # Filter rows by Executor and Shift
     $tableMatches = @()
     for ($r = 1; $r -lt $rows.length; $r++) {
         $cells = $rows.item($r).cells
         if ($cells.length -gt $execIdx) {
             $rowExec = ($cells.item($execIdx).innerText -replace '\s+', ' ').Trim()
 
-            # Filter Executor
             if ($rowExec -like "*$Executor*") {
                 
-                # Filter Shift (if specified)
                 if ($Shift -and $shiftIdx -ne -1 -and $cells.length -gt $shiftIdx) {
                     $rowShift = ($cells.item($shiftIdx).innerText -replace '\s+', ' ').Trim()
                     if ($rowShift -notlike "*$Shift*") {
@@ -89,7 +145,7 @@ foreach ($table in $tables) {
                     $rowObj[$key] = ($cells.item($c).innerText -replace '\s+', ' ').Trim()
                 }
 
-                # Ensure Server Name
+                # Ensure Server Name exists
                 $hasServer = $false
                 foreach ($k in $rowObj.Keys) {
                     if ($k -match "(?i)server\s*name") { $hasServer = $true; break }
@@ -108,7 +164,7 @@ foreach ($table in $tables) {
         }
     }
 
-    # 4. Display this individual table separately
+    # Render distinct output for this table
     if ($tableMatches.Count -gt 0) {
         Write-Host "`n========================================================" -ForegroundColor Cyan
         Write-Host "TABLE: $heading" -ForegroundColor Yellow
@@ -116,8 +172,6 @@ foreach ($table in $tables) {
         Write-Host "========================================================" -ForegroundColor Cyan
         
         $tableMatches | Format-Table -AutoSize
-        
-        # Opens an individual GUI grid view window per table
-        $tableMatches | Out-GridView -Title "$heading - ($Executor)"
+        $tableMatches | Out-GridView -Title "$heading - ($Executor) [Latest Email]"
     }
 }
